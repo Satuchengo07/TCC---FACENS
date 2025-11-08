@@ -1,0 +1,73 @@
+from airflow import DAG
+from airflow.operators.python_operator import PythonOperator
+from airflow.operators.dummy_operator import DummyOperator
+from datetime import date, datetime, timedelta
+from saneamento.operators.sap_bw_rfc_to_azure_data_lake_gen2_transfer import SapBwRFCToAzureDataLakeGen2Transfer
+
+from airflow.contrib.operators.databricks_operator import DatabricksSubmitRunOperator
+from saneamento.airflow_utils import ExternalTaskSensor
+
+default_args = {
+	'owner': 'tcc',
+	'depends_on_past': True,
+	'start_date': datetime(2022, 12, 16),
+	'email_on_failure': False,
+	'email_on_retry': False,
+	'retries': 3,
+	'retry_delay': timedelta(minutes=20)
+}
+	
+dag = DAG('san_macro_macro2963',
+		  default_args=default_args,
+		  catchup=True,
+		  schedule_interval='0 0 * * 1-5'
+		  tags=['comercial','SAN','Macro 2963'])
+		  
+inicio = DummyOperator(
+	   task_id='inicio',
+	   pool='sensor_pool',
+	   dag=dag
+)
+
+inicio_sensor = DummyOperator(
+	   task_id='inicio_sensor',
+	   pool='sensor_pool',
+	   dag=dag
+)
+
+fim_sensor = DummyOperator(
+	   task_id='fim_sensor',
+	   pool='sensor_pool',
+	   dag=dag
+)
+
+list_sensor = [('sensor_std_ligacaoresumocategoria', '01_raw_to_std_ligacaoresumocategoria', 0),
+			   ('sensor_std_categoria', '01_raw_to_std_categoria', 0),
+			   ('sensor_std_periodo', '01_raw_to_std_periodo', 0)]
+
+for sensor in list_sensor:
+	task_sensor = ExternalTaskSensor(
+		task_id=f"{sensor[0]}",
+		external_dag_id=f"{sensor[1]}",
+		execution_delta=timedelta(hours=sensor[2]),
+		pool="sensor_pool",
+		dag=dag
+		)
+		inicio >> inicio_sensor >> task_sensor >> fim_sensor
+std_to_trd_comercial_macro296 = DatabricksSubmitRunOperator(
+        databricks_conn_id='databricks_east_us2',
+		task_id="trd_comercial_macro296",
+		dag=dag,
+		json={
+			'existing_cluster_id': "{{ var.value.databricks_east_us2_data_enginnering_jobs_night_prod_cluster_id }}",
+			'notebook_task':{
+				'notebook_path': databricks_utils.get_notebook_path('comercial/macro/trd_comercial_macro296')
+			}
+		})
+		
+fim= DummyOperator(
+	task_id='fim',
+	pool="sensor_pool",
+	dag=dag)
+	
+fim_sensor >> [std_to_trd_comercial_macro296] >> fim
